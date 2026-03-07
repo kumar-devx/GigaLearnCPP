@@ -1,0 +1,26 @@
+# Visual Studio cache and build files
+.vs/
+.vscode/
+*.ipch
+*.db
+
+# Build directories
+build/
+x64/
+Debug/
+Release/
+
+# IDE files
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
