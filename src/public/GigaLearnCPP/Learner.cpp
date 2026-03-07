@@ -1,7 +1,36 @@
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+// Undefine problematic Windows macros before any includes
+#ifdef small
+#undef small
+#endif
+#ifdef max
+#undef max
+#endif
+#ifdef min
+#undef min
+#endif
+#endif
+
 #include "Learner.h"
 
 #include <GigaLearnCPP/PPO/PPOLearner.h>
 #include <GigaLearnCPP/PPO/ExperienceBuffer.h>
+
+// Undefine again in case headers pulled it in
+#ifdef _WIN32
+#ifdef small
+#undef small
+#endif
+#ifdef max
+#undef max
+#endif
+#ifdef min
+#undef min
+#endif
+#endif
 
 #include <torch/cuda.h>
 #include <nlohmann/json.hpp>
@@ -9,10 +38,17 @@
 #include <pybind11/embed.h>
 
 #ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
 #include <Windows.h>
+// Undefine Windows macros that conflict with standard library
+#ifdef small
+#undef small
+#endif
+#ifdef max
+#undef max
+#endif
+#ifdef min
+#undef min
+#endif
 #endif
 
 #ifdef RG_CUDA_SUPPORT

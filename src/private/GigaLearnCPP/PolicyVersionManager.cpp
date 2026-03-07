@@ -324,3 +324,15 @@ void GGL::PolicyVersionManager::LoadRunningStatsFromJSON(const nlohmann::json& j
 		if (json.contains("skill_ratings"))
 			skill.curRatings.ReadFromJSON(json["skill_ratings"]);
 }
+
+GGL::PolicyVersionManager::~PolicyVersionManager() {
+	for (auto& version : versions) {
+		version.models.Free();
+	}
+	versions.clear();
+
+	if (skill.envSet) {
+		delete skill.envSet;
+		skill.envSet = nullptr;
+	}
+}

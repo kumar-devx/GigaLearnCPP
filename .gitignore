@@ -24,3 +24,7 @@ Thumbs.db
 __pycache__/
 *.pyc
 *.pyo
+
+# ignore pybind11 directory if it exists
+pybind11/
+RLGymCPP/RocketSim/

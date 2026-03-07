@@ -100,9 +100,9 @@ namespace GGL {
 
 		void OnIteration(struct PPOLearner* ppo, Report& report, int64_t totalTimesteps, int64_t prevTotalTimesteps);
 
-		void AddRunningStatsToJSON(nlohmann::json& json);
-		void LoadRunningStatsFromJSON(const nlohmann::json& json);
+			void AddRunningStatsToJSON(nlohmann::json& json);
+			void LoadRunningStatsFromJSON(const nlohmann::json& json);
 
-		// TODO: Add deconstructor
-	};
+			~PolicyVersionManager();
+		};
 }
