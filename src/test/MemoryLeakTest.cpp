@@ -386,6 +386,17 @@ int main() {
             std::cout << "✓ CUDA is available" << std::endl;
             std::cout << "  Device count: " << torch::cuda::device_count() << std::endl;
             std::cout << "  CUDA Version: " << CUDART_VERSION / 1000 << "." << (CUDART_VERSION % 100) / 10 << std::endl;
+            
+            // Check GPU compute capability
+            cudaDeviceProp prop;
+            cudaGetDeviceProperties(&prop, 0);
+            std::cout << "  GPU: " << prop.name << std::endl;
+            std::cout << "  Compute Capability: " << prop.major << "." << prop.minor << std::endl;
+            std::cout << "  Total Memory: " << (prop.totalGlobalMem / (1024 * 1024)) << " MB" << std::endl;
+            
+            std::cout << "\n⚠️  WARNING: If tests fail with 'no kernel image' error," << std::endl;
+            std::cout << "    your libtorch was compiled for different GPU architectures." << std::endl;
+            std::cout << "    Download libtorch with compute capability " << prop.major << "." << prop.minor << " support." << std::endl;
         } else {
             std::cout << "✗ CUDA not available - some tests will be skipped" << std::endl;
         }
