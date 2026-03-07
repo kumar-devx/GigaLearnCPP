@@ -47,16 +47,36 @@ GPUMemorySnapshot GetGPUMemory() {
     snapshot.timestamp = std::chrono::system_clock::now();
     
 #ifdef RG_CUDA_SUPPORT
-    if (torch::cuda::is_available()) {
-        size_t free_bytes = 0;
-        size_t total_bytes = 0;
-        cudaMemGetInfo(&free_bytes, &total_bytes);
-        
-        snapshot.total_mb = total_bytes / (1024 * 1024);
-        snapshot.free_mb = free_bytes / (1024 * 1024);
-        snapshot.allocated_mb = snapshot.total_mb - snapshot.free_mb;
-    } else {
-        std::cout << "CUDA not available!" << std::endl;
+    try {
+        if (torch::cuda::is_available()) {
+            size_t free_bytes = 0;
+            size_t total_bytes = 0;
+            cudaError_t err = cudaMemGetInfo(&free_bytes, &total_bytes);
+            
+            if (err != cudaSuccess) {
+                std::cerr << "cudaMemGetInfo failed: " << cudaGetErrorString(err) << std::endl;
+                snapshot.total_mb = 0;
+                snapshot.free_mb = 0;
+                snapshot.allocated_mb = 0;
+                return snapshot;
+            }
+            
+            snapshot.total_mb = total_bytes / (1024 * 1024);
+            snapshot.free_mb = free_bytes / (1024 * 1024);
+            snapshot.allocated_mb = snapshot.total_mb - snapshot.free_mb;
+        } else {
+            std::cout << "CUDA not available!" << std::endl;
+            snapshot.total_mb = 0;
+            snapshot.free_mb = 0;
+            snapshot.allocated_mb = 0;
+        }
+    } catch (const c10::Error& e) {
+        std::cerr << "CUDA Error in GetGPUMemory: " << e.what() << std::endl;
+        snapshot.total_mb = 0;
+        snapshot.free_mb = 0;
+        snapshot.allocated_mb = 0;
+    } catch (const std::exception& e) {
+        std::cerr << "Exception in GetGPUMemory: " << e.what() << std::endl;
         snapshot.total_mb = 0;
         snapshot.free_mb = 0;
         snapshot.allocated_mb = 0;
@@ -133,28 +153,38 @@ bool TestBasicCUDAMemory() {
     return true;
 #endif
     
-    MemoryLeakTester tester;
-    
-    tester.TakeSnapshot("Before allocation");
-    
-    // Allocate some GPU memory
-    {
-        auto tensor = torch::randn({1000, 1000}, torch::device(torch::kCUDA));
-        tester.TakeSnapshot("After allocation (1000x1000 tensor)");
-    } // tensor goes out of scope here
-    
-    // Force CUDA synchronization and cache clearing
+    try {
+        MemoryLeakTester tester;
+        
+        tester.TakeSnapshot("Before allocation");
+        
+        // Allocate some GPU memory
+        {
+            auto tensor = torch::randn({1000, 1000}, torch::device(torch::kCUDA));
+            tester.TakeSnapshot("After allocation (1000x1000 tensor)");
+        } // tensor goes out of scope here
+        
+        // Force CUDA synchronization and cache clearing
 #ifdef RG_CUDA_SUPPORT
-    torch::cuda::synchronize();
-    c10::cuda::CUDACachingAllocator::emptyCache();
+        torch::cuda::synchronize();
+        c10::cuda::CUDACachingAllocator::emptyCache();
 #endif
-    
-    tester.TakeSnapshot("After deallocation");
-    
-    bool has_leak = tester.DetectLeak();
-    
-    std::cout << "\nTest 1: " << (has_leak ? "FAILED ❌" : "PASSED ✅") << std::endl;
-    return !has_leak;
+        
+        tester.TakeSnapshot("After deallocation");
+        
+        bool has_leak = tester.DetectLeak();
+        
+        std::cout << "\nTest 1: " << (has_leak ? "FAILED ❌" : "PASSED ✅") << std::endl;
+        return !has_leak;
+    } catch (const c10::Error& e) {
+        std::cerr << "CUDA Error in Test 1: " << e.what() << std::endl;
+        std::cout << "\nTest 1: FAILED ❌ (CUDA Error)" << std::endl;
+        return false;
+    } catch (const std::exception& e) {
+        std::cerr << "Exception in Test 1: " << e.what() << std::endl;
+        std::cout << "\nTest 1: FAILED ❌ (Exception)" << std::endl;
+        return false;
+    }
 }
 
 // Test 2: Multiple Allocation Cycles
@@ -168,34 +198,44 @@ bool TestMultipleCycles() {
     return true;
 #endif
     
-    MemoryLeakTester tester;
-    
-    tester.TakeSnapshot("Initial");
-    
-    for (int i = 0; i < 5; i++) {
-        std::cout << "\n--- Cycle " << (i + 1) << " ---" << std::endl;
+    try {
+        MemoryLeakTester tester;
         
-        // Allocate
-        {
-            auto tensor = torch::randn({500, 500}, torch::device(torch::kCUDA));
-            std::cout << "  Allocated tensor" << std::endl;
+        tester.TakeSnapshot("Initial");
+        
+        for (int i = 0; i < 5; i++) {
+            std::cout << "\n--- Cycle " << (i + 1) << " ---" << std::endl;
+            
+            // Allocate
+            {
+                auto tensor = torch::randn({500, 500}, torch::device(torch::kCUDA));
+                std::cout << "  Allocated tensor" << std::endl;
+            }
+            
+            // Clean up
+#ifdef RG_CUDA_SUPPORT
+            torch::cuda::synchronize();
+            c10::cuda::CUDACachingAllocator::emptyCache();
+#endif
+            
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
         }
         
-        // Clean up
-#ifdef RG_CUDA_SUPPORT
-        torch::cuda::synchronize();
-        c10::cuda::CUDACachingAllocator::emptyCache();
-#endif
+        tester.TakeSnapshot("After 5 cycles");
         
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        bool has_leak = tester.DetectLeak();
+        
+        std::cout << "\nTest 2: " << (has_leak ? "FAILED ❌" : "PASSED ✅") << std::endl;
+        return !has_leak;
+    } catch (const c10::Error& e) {
+        std::cerr << "CUDA Error in Test 2: " << e.what() << std::endl;
+        std::cout << "\nTest 2: FAILED ❌ (CUDA Error)" << std::endl;
+        return false;
+    } catch (const std::exception& e) {
+        std::cerr << "Exception in Test 2: " << e.what() << std::endl;
+        std::cout << "\nTest 2: FAILED ❌ (Exception)" << std::endl;
+        return false;
     }
-    
-    tester.TakeSnapshot("After 5 cycles");
-    
-    bool has_leak = tester.DetectLeak();
-    
-    std::cout << "\nTest 2: " << (has_leak ? "FAILED ❌" : "PASSED ✅") << std::endl;
-    return !has_leak;
 }
 
 // Test 3: Pointer Lifecycle Test
@@ -209,39 +249,49 @@ bool TestPointerLifecycle() {
     return true;
 #endif
     
-    MemoryLeakTester tester;
-    
-    tester.TakeSnapshot("Initial");
-    
-    // Test pattern similar to InferUnit
-    {
-        std::cout << "Allocating on heap..." << std::endl;
-        auto* data = new std::vector<torch::Tensor>();
+    try {
+        MemoryLeakTester tester;
         
-        for (int i = 0; i < 3; i++) {
-            data->push_back(torch::randn({100, 100}, torch::device(torch::kCUDA)));
+        tester.TakeSnapshot("Initial");
+        
+        // Test pattern similar to InferUnit
+        {
+            std::cout << "Allocating on heap..." << std::endl;
+            auto* data = new std::vector<torch::Tensor>();
+            
+            for (int i = 0; i < 3; i++) {
+                data->push_back(torch::randn({100, 100}, torch::device(torch::kCUDA)));
+            }
+            
+            tester.TakeSnapshot("After allocation");
+            
+            // Clean up
+            data->clear();
+            delete data;
+            
+            std::cout << "Deleted heap data" << std::endl;
         }
         
-        tester.TakeSnapshot("After allocation");
-        
-        // Clean up
-        data->clear();
-        delete data;
-        
-        std::cout << "Deleted heap data" << std::endl;
-    }
-    
 #ifdef RG_CUDA_SUPPORT
-    torch::cuda::synchronize();
-    c10::cuda::CUDACachingAllocator::emptyCache();
+        torch::cuda::synchronize();
+        c10::cuda::CUDACachingAllocator::emptyCache();
 #endif
-    
-    tester.TakeSnapshot("After cleanup");
-    
-    bool has_leak = tester.DetectLeak();
-    
-    std::cout << "\nTest 3: " << (has_leak ? "FAILED ❌" : "PASSED ✅") << std::endl;
-    return !has_leak;
+        
+        tester.TakeSnapshot("After cleanup");
+        
+        bool has_leak = tester.DetectLeak();
+        
+        std::cout << "\nTest 3: " << (has_leak ? "FAILED ❌" : "PASSED ✅") << std::endl;
+        return !has_leak;
+    } catch (const c10::Error& e) {
+        std::cerr << "CUDA Error in Test 3: " << e.what() << std::endl;
+        std::cout << "\nTest 3: FAILED ❌ (CUDA Error)" << std::endl;
+        return false;
+    } catch (const std::exception& e) {
+        std::cerr << "Exception in Test 3: " << e.what() << std::endl;
+        std::cout << "\nTest 3: FAILED ❌ (Exception)" << std::endl;
+        return false;
+    }
 }
 
 // Test 4: Simulate InferUnit Pattern
@@ -255,7 +305,8 @@ bool TestInferUnitPattern() {
     return true;
 #endif
     
-    MemoryLeakTester tester;
+    try {
+        MemoryLeakTester tester;
     
     tester.TakeSnapshot("Initial");
     
@@ -312,6 +363,15 @@ bool TestInferUnitPattern() {
     
     std::cout << "\nTest 4: " << (has_leak ? "FAILED ❌" : "PASSED ✅") << std::endl;
     return !has_leak;
+    } catch (const c10::Error& e) {
+        std::cerr << "CUDA Error in Test 4: " << e.what() << std::endl;
+        std::cout << "\nTest 4: FAILED ❌ (CUDA Error)" << std::endl;
+        return false;
+    } catch (const std::exception& e) {
+        std::cerr << "Exception in Test 4: " << e.what() << std::endl;
+        std::cout << "\nTest 4: FAILED ❌ (Exception)" << std::endl;
+        return false;
+    }
 }
 
 // Main test runner
@@ -321,12 +381,22 @@ int main() {
     std::cout << std::endl;
     
 #ifdef RG_CUDA_SUPPORT
-    if (torch::cuda::is_available()) {
-        std::cout << "✓ CUDA is available" << std::endl;
-        std::cout << "  Device count: " << torch::cuda::device_count() << std::endl;
-        std::cout << "  CUDA Version: " << CUDART_VERSION / 1000 << "." << (CUDART_VERSION % 100) / 10 << std::endl;
-    } else {
-        std::cout << "✗ CUDA not available - some tests will be skipped" << std::endl;
+    try {
+        if (torch::cuda::is_available()) {
+            std::cout << "✓ CUDA is available" << std::endl;
+            std::cout << "  Device count: " << torch::cuda::device_count() << std::endl;
+            std::cout << "  CUDA Version: " << CUDART_VERSION / 1000 << "." << (CUDART_VERSION % 100) / 10 << std::endl;
+        } else {
+            std::cout << "✗ CUDA not available - some tests will be skipped" << std::endl;
+        }
+    } catch (const c10::Error& e) {
+        std::cerr << "✗ CUDA Error during initialization: " << e.what() << std::endl;
+        std::cerr << "Tests will be skipped." << std::endl;
+        return 1;
+    } catch (const std::exception& e) {
+        std::cerr << "✗ Exception during CUDA initialization: " << e.what() << std::endl;
+        std::cerr << "Tests will be skipped." << std::endl;
+        return 1;
     }
 #else
     std::cout << "✗ CUDA support not compiled - tests will be skipped" << std::endl;

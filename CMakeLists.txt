@@ -37,6 +37,8 @@ target_include_directories(GigaLearnCPP PRIVATE "src/private")
 
 # Include libtorch
 target_link_libraries(GigaLearnCPP PRIVATE "${TORCH_LIBRARIES}")
+# Treat libtorch headers as system headers to suppress warnings
+target_include_directories(GigaLearnCPP SYSTEM PRIVATE ${TORCH_INCLUDE_DIRS})
 
 if (TORCH_CUDA_LIBRARIES)
 	message("Enabling CUDA support...")
@@ -105,6 +107,8 @@ set_target_properties(MemoryLeakTest PROPERTIES
 	LINKER_LANGUAGE CXX
 )
 target_link_libraries(MemoryLeakTest PRIVATE "${TORCH_LIBRARIES}")
+# Treat libtorch headers as system headers to suppress warnings
+target_include_directories(MemoryLeakTest SYSTEM PRIVATE ${TORCH_INCLUDE_DIRS})
 if (TORCH_CUDA_LIBRARIES)
 	target_compile_definitions(MemoryLeakTest PRIVATE -DRG_CUDA_SUPPORT)
 endif()
