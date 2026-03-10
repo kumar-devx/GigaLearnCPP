@@ -119,6 +119,9 @@ RLGC::EnvSet::EnvSet(const EnvSetConfig& config) : config(config) {
 			for (Arena* arena : arenas)
 				arenaBatch->AddArena(arena);
 			useArenaBatch = true;
+			RG_LOG("EnvSet: Batched GPU stepping ENABLED (" << arenas.size() << " arenas, " << state.numPlayers << " total players)");
+		} else {
+			RG_LOG("EnvSet: Batched GPU stepping disabled (not all arenas have CUDA enabled)");
 		}
 	}
 #endif
