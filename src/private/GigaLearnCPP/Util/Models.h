@@ -150,16 +150,11 @@ namespace GGL {
 				total += param.numel();
 			}
 
-					return total;
-				}
+			return total;
+		}
 
-				~Model() {
-					if (optim) {
-						delete optim;
-						optim = nullptr;
-					}
-				}
-			};
+		virtual ~Model() = default;
+	};
 
 	class ModelSet {
 	public:

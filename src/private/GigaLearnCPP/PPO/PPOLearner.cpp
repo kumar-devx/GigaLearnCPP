@@ -412,10 +412,3 @@ GGL::ModelSet GGL::PPOLearner::GetPolicyModels() {
 	}
 	return result;
 }
-
-GGL::PPOLearner::~PPOLearner() {
-	models.Free();
-	if (!guidingPolicyModels.map.empty()) {
-		guidingPolicyModels.Free();
-	}
-}

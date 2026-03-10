@@ -17,9 +17,9 @@ namespace GGL {
 			std::filesystem::path modelsFolder, bool useGPU);
 
 
-			RLGC::Action InferAction(const RLGC::Player& player, const RLGC::GameState& state, bool deterministic, float temperature = 1);
-			std::vector<RLGC::Action> BatchInferActions(const std::vector<RLGC::Player>& players, const std::vector<RLGC::GameState>& states, bool deterministic, float temperature = 1);
+		RLGC::Action InferAction(const RLGC::Player& player, const RLGC::GameState& state, bool deterministic, float temperature = 1);
+		std::vector<RLGC::Action> BatchInferActions(const std::vector<RLGC::Player>& players, const std::vector<RLGC::GameState>& states, bool deterministic, float temperature = 1);
 
-			~InferUnit();
-		};
+		// TODO: Add deconstructor (make sure to free models too)
+	};
 }

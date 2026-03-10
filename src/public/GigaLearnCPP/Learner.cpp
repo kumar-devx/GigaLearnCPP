@@ -1,59 +1,11 @@
-#ifdef _WIN32
-#ifndef NOMINMAX
-#define NOMINMAX
-#endif
-// Undefine problematic Windows macros before any includes
-#ifdef small
-#undef small
-#endif
-#ifdef max
-#undef max
-#endif
-#ifdef min
-#undef min
-#endif
-#endif
-
 #include "Learner.h"
 
 #include <GigaLearnCPP/PPO/PPOLearner.h>
 #include <GigaLearnCPP/PPO/ExperienceBuffer.h>
 
-// Undefine again in case headers pulled it in
-#ifdef _WIN32
-#ifdef small
-#undef small
-#endif
-#ifdef max
-#undef max
-#endif
-#ifdef min
-#undef min
-#endif
-#endif
-
 #include <torch/cuda.h>
 #include <nlohmann/json.hpp>
-#include <Python.h>
 #include <pybind11/embed.h>
-
-#ifdef _WIN32
-#include <Windows.h>
-// Undefine Windows macros that conflict with standard library
-#ifdef small
-#undef small
-#endif
-#ifdef max
-#undef max
-#endif
-#ifdef min
-#undef min
-#endif
-#endif
-
-#ifdef RG_CUDA_SUPPORT
-#include <c10/cuda/CUDACachingAllocator.h>
-#endif
 #include <private/GigaLearnCPP/PPO/ExperienceBuffer.h>
 #include <private/GigaLearnCPP/PPO/GAE.h>
 #include <private/GigaLearnCPP/PolicyVersionManager.h>
@@ -67,22 +19,6 @@ using namespace RLGC;
 GGL::Learner::Learner(EnvCreateFn envCreateFn, LearnerConfig config, StepCallbackFn stepCallback) :
 	envCreateFn(envCreateFn), config(config), stepCallback(stepCallback)
 {
-	// Set Python home to use the system Python installation
-#ifdef _WIN32
-	// Get the Python executable path from CMake definition
-	std::string pyExecPath = PY_EXEC_PATH;
-	
-	// Extract Python home directory (remove python.exe)
-	size_t lastSlash = pyExecPath.find_last_of("\\/");
-	std::string pyHome = pyExecPath.substr(0, lastSlash);
-	
-	// Convert to wide string for Windows
-	std::wstring pyHomeWide(pyHome.begin(), pyHome.end());
-	Py_SetPythonHome(pyHomeWide.c_str());
-	
-	RG_LOG("Setting Python home to: " << pyHome);
-#endif
-
 	pybind11::initialize_interpreter();
 
 #ifndef NDEBUG
@@ -624,6 +560,7 @@ void GGL::Learner::Start() {
 
 				// Only contains complete episodes
 				auto combinedTraj = Trajectory();
+				float envStepTimeTotal = 0;
 
 				Timer collectionTimer = {};
 				{ // Collect timesteps
@@ -784,6 +721,7 @@ void GGL::Learner::Start() {
 
 					report["Inference Time"] = inferTime;
 					report["Env Step Time"] = envStepTime;
+					envStepTimeTotal = envStepTime;
 				}
 				float collectionTime = collectionTimer.Elapsed();
 
@@ -873,12 +811,6 @@ void GGL::Learner::Start() {
 					experience.data.targetValues = tTargetVals;
 				}
 
-				// Free CUDA cache
-#ifdef RG_CUDA_SUPPORT
-				if (ppo->device.is_cuda())
-					c10::cuda::CUDACachingAllocator::emptyCache();
-#endif
-
 				// Learn
 				Timer learnTimer = {};
 				ppo->Learn(experience, report, isFirstIteration);
@@ -886,11 +818,20 @@ void GGL::Learner::Start() {
 
 				// Set metrics
 				float consumptionTime = consumptionTimer.Elapsed();
+				double collectedPhysicsTicks = (double)stepsCollected * (double)config.tickSkip;
 				report["Collection Time"] = collectionTime;
 				report["Consumption Time"] = consumptionTime;
 				report["Collection Steps/Second"] = stepsCollected / collectionTime;
 				report["Consumption Steps/Second"] = stepsCollected / consumptionTime;
 				report["Overall Steps/Second"] = stepsCollected / (collectionTime + consumptionTime);
+				report["Collection Decisions/Second"] = report["Collection Steps/Second"];
+				report["Overall Decisions/Second"] = report["Overall Steps/Second"];
+				report["Collected Physics Ticks"] = collectedPhysicsTicks;
+				report["Collection Physics Ticks/Second"] = collectedPhysicsTicks / collectionTime;
+				report["Consumption Physics Ticks/Second"] = collectedPhysicsTicks / consumptionTime;
+				report["Overall Physics Ticks/Second"] = collectedPhysicsTicks / (collectionTime + consumptionTime);
+				if (envStepTimeTotal > 0)
+					report["Env Physics Ticks/Second"] = collectedPhysicsTicks / envStepTimeTotal;
 
 				uint64_t prevTimesteps = totalTimesteps;
 				totalTimesteps += stepsCollected;
@@ -933,15 +874,19 @@ void GGL::Learner::Start() {
 						"Collection Steps/Second",
 						"Consumption Steps/Second",
 						"Overall Steps/Second",
+						"Collection Physics Ticks/Second",
+						"Overall Physics Ticks/Second",
 						"",
 						"Collection Time",
 						"-Inference Time",
 						"-Env Step Time",
+						"-Env Physics Ticks/Second",
 						"Consumption Time",
 						"-GAE Time",
 						"-PPO Learn Time"
 						"",
 						"Collected Timesteps",
+						"Collected Physics Ticks",
 						"Total Timesteps",
 						"Total Iterations"
 					}
@@ -955,33 +900,9 @@ void GGL::Learner::Start() {
 }
 
 GGL::Learner::~Learner() {
-	if (ppo) {
-		delete ppo;
-		ppo = nullptr;
-	}
-	if (versionMgr) {
-		delete versionMgr;
-		versionMgr = nullptr;
-	}
-	if (metricSender) {
-		delete metricSender;
-		metricSender = nullptr;
-	}
-	if (renderSender) {
-		delete renderSender;
-		renderSender = nullptr;
-	}
-	if (envSet) {
-		delete envSet;
-		envSet = nullptr;
-	}
-	if (returnStat) {
-		delete returnStat;
-		returnStat = nullptr;
-	}
-	if (obsStat) {
-		delete obsStat;
-		obsStat = nullptr;
-	}
+	delete ppo;
+	delete versionMgr;
+	delete metricSender;
+	delete renderSender;
 	pybind11::finalize_interpreter();
 }

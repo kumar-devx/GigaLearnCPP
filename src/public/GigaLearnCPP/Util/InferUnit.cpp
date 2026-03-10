@@ -3,11 +3,6 @@
 #include <GigaLearnCPP/Util/Models.h>
 #include <GigaLearnCPP/PPO/PPOLearner.h>
 
-#ifdef RG_CUDA_SUPPORT
-#include <torch/cuda.h>
-#include <c10/cuda/CUDACachingAllocator.h>
-#endif
-
 GGL::InferUnit::InferUnit(
 	RLGC::ObsBuilder* obsBuilder, int obsSize, RLGC::ActionParser* actionParser,
 	PartialModelConfig sharedHeadConfig, PartialModelConfig policyConfig, 
@@ -76,40 +71,13 @@ std::vector<RLGC::Action> GGL::InferUnit::BatchInferActions(const std::vector<RL
 		PPOLearner::InferActionsFromModels(*models, tObs, tActionMasks, deterministic, temperature, false, &tActions, &tLogProbs);
 
 		auto actionIndices = TENSOR_TO_VEC<int>(tActions);
-
+		
 		for (int i = 0; i < batchSize; i++) 
 			results.push_back(actionParser->ParseAction(actionIndices[i], players[i], states[i]));
-
-#ifdef RG_CUDA_SUPPORT
-		if (useGPU) {
-			torch::cuda::synchronize();
-			c10::cuda::CUDACachingAllocator::emptyCache();
-		}
-#endif
 
 	} catch (std::exception& e) {
 		RG_ERR_CLOSE("InferUnit: Exception when inferring model: " << e.what());
 	}
 
 	return results;
-}
-
-GGL::InferUnit::~InferUnit() {
-#ifdef RG_CUDA_SUPPORT
-	if (useGPU) {
-		torch::cuda::synchronize();
-	}
-#endif
-
-	if (models) {
-		models->Free();
-		delete models;
-		models = nullptr;
-	}
-
-#ifdef RG_CUDA_SUPPORT
-	if (useGPU) {
-		c10::cuda::CUDACachingAllocator::emptyCache();
-	}
-#endif
 }

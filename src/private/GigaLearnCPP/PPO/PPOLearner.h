@@ -1,5 +1,5 @@
 #pragma once
-#include "ExperienceBuffer.h"
+#include "ExperienceBuffer.h";
 #include <GigaLearnCPP/Util/Report.h>
 #include <GigaLearnCPP/Util/Timer.h>
 #include <GigaLearnCPP/PPO/PPOLearnerConfig.h>
@@ -68,10 +68,8 @@ namespace GGL {
 
 		void SaveTo(std::filesystem::path folderPath);
 		void LoadFrom(std::filesystem::path folderPath);
-			void SetLearningRates(float policyLR, float criticLR);
+		void SetLearningRates(float policyLR, float criticLR);
 
-			ModelSet GetPolicyModels();
-
-			~PPOLearner();
-		};
+		ModelSet GetPolicyModels();
+	};
 }
