@@ -8,6 +8,7 @@
 using namespace torch;
 
 GGL::PPOLearner::PPOLearner(int obsSize, int numActions, PPOLearnerConfig _config, Device _device) : config(_config), device(_device) {
+	config.SyncPrecisionAliases();
 
 	if (config.miniBatchSize == 0)
 		config.miniBatchSize = config.batchSize;
@@ -28,6 +29,8 @@ GGL::PPOLearner::PPOLearner(int obsSize, int numActions, PPOLearnerConfig _confi
 		total += count;
 	}
 	RG_LOG("\t[Total]: " << Utils::NumToStr(total));
+	RG_LOG("\tMixed precision inference: " << (config.useHalfPrecision ? "ENABLED" : "DISABLED") <<
+		(config.useHalfPrecision ? (device.is_cuda() ? " (CUDA FP16)" : " (CPU BF16)") : ""));
 
 	if (config.useGuidingPolicy) {
 		RG_LOG("Guiding policy enabled, loading from " << config.guidingPolicyPath << "...");

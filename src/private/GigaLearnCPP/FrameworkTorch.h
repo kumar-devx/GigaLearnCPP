@@ -20,9 +20,11 @@ at::autocast::clear_cache(); \
 at::autocast::set_enabled(false); \
 }
 
-#define RG_HALFPERC_TYPE torch::ScalarType::BFloat16
-
 namespace GGL {
+	inline torch::ScalarType GetHalfPrecisionType(const torch::Device& device) {
+		return device.is_cuda() ? torch::kHalf : torch::kBFloat16;
+	}
+
 	template <typename T>
 	inline torch::Tensor DIMLIST2_TO_TENSOR(const RLGC::DimList2<T>& list) {
 		return torch::tensor(list.data).reshape({ (int64_t)list.size[0], (int64_t)list.size[1] });

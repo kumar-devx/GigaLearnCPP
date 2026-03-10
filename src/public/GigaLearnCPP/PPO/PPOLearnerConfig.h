@@ -30,6 +30,11 @@ namespace GGL {
 		// This is much faster on GPU, not so much for CPU
 		bool useHalfPrecision = false;
 
+		// Aliases for useHalfPrecision to make external config code more portable.
+		// These fields are synchronized in SyncPrecisionAliases().
+		bool useMixedPrecision = false;
+		bool use_mixed_precision = false;
+
 		PartialModelConfig policy, critic, sharedHead;
 
 		int epochs = 2;
@@ -55,6 +60,13 @@ namespace GGL {
 		bool useGuidingPolicy = false;
 		std::filesystem::path guidingPolicyPath = "guiding_policy/"; // Path of the guiding policy model(s)
 		float guidingStrength = 0.03f;
+
+		void SyncPrecisionAliases() {
+			bool enabled = useHalfPrecision || useMixedPrecision || use_mixed_precision;
+			useHalfPrecision = enabled;
+			useMixedPrecision = enabled;
+			use_mixed_precision = enabled;
+		}
 
 		PPOLearnerConfig() {
 			policy = {};

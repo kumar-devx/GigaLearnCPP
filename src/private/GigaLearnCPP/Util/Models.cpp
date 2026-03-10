@@ -39,6 +39,7 @@ torch::Tensor GGL::Model::Forward(torch::Tensor input, bool halfPrec) {
 		halfPrec = false;
 
 	if (halfPrec) {
+		auto halfType = GGL::GetHalfPrecisionType(device);
 
 		if (_seqHalfOutdated) {
 			_seqHalfOutdated = false;
@@ -46,18 +47,18 @@ torch::Tensor GGL::Model::Forward(torch::Tensor input, bool halfPrec) {
 			if (seqHalf->size() == 0) {
 				for (auto& mod : *seq)
 					seqHalf->push_back(mod.clone());
-				seqHalf->to(RG_HALFPERC_TYPE, true);
+				seqHalf->to(halfType, true);
 			} else {
 				auto fromParams = seq->parameters();
 				auto toParams = seqHalf->parameters();
 				for (int i = 0; i < fromParams.size(); i++) {
-					auto scaledParams = fromParams[i].to(RG_HALFPERC_TYPE, true);
+					auto scaledParams = fromParams[i].to(halfType, true);
 					toParams[i].copy_(scaledParams, true);
 				}
 			}
 		}
 		
-		auto halfInput = input.to(RG_HALFPERC_TYPE);
+		auto halfInput = input.to(halfType);
 		auto halfOutput = seqHalf->forward(halfInput);
 		return halfOutput.to(torch::kFloat);
 	} else {
