@@ -4,8 +4,12 @@
 #include <GigaLearnCPP/PPO/ExperienceBuffer.h>
 
 #include <torch/cuda.h>
+#ifdef RG_CUDA_SUPPORT
+#include <c10/cuda/CUDACachingAllocator.h>
+#endif
 #include <nlohmann/json.hpp>
 #include <pybind11/embed.h>
+#include <cstdlib>
 #include <private/GigaLearnCPP/PPO/ExperienceBuffer.h>
 #include <private/GigaLearnCPP/PPO/GAE.h>
 #include <private/GigaLearnCPP/PolicyVersionManager.h>
@@ -15,6 +19,10 @@
 #include "Util/AvgTracker.h"
 
 using namespace RLGC;
+
+static inline double BytesToGiB(double bytes) {
+	return bytes / (1024.0 * 1024.0 * 1024.0);
+}
 
 GGL::Learner::Learner(EnvCreateFn envCreateFn, LearnerConfig config, StepCallbackFn stepCallback) :
 	envCreateFn(envCreateFn), config(config), stepCallback(stepCallback)
@@ -31,12 +39,28 @@ GGL::Learner::Learner(EnvCreateFn envCreateFn, LearnerConfig config, StepCallbac
 	if (config.tsPerSave == 0)
 		config.tsPerSave = config.ppo.tsPerItr;
 
+	config.ppo.SyncRuntimeAliases();
+
 	RG_LOG("Learner::Learner():");
 
 	if (config.randomSeed == -1)
 		config.randomSeed = RS_CUR_MS();
 
 	RG_LOG("\tCheckpoint Save/Load Dir: " << config.checkpointFolder);
+
+	if (config.setDefaultCudaAllocConf) {
+		const char* curAllocConf = std::getenv("PYTORCH_CUDA_ALLOC_CONF");
+		if (!curAllocConf || !curAllocConf[0]) {
+#if defined(_WIN32)
+			_putenv_s("PYTORCH_CUDA_ALLOC_CONF", config.defaultCudaAllocConf.c_str());
+#else
+			setenv("PYTORCH_CUDA_ALLOC_CONF", config.defaultCudaAllocConf.c_str(), 1);
+#endif
+			RG_LOG("\tSet PYTORCH_CUDA_ALLOC_CONF=" << config.defaultCudaAllocConf);
+		} else {
+			RG_LOG("\tUsing existing PYTORCH_CUDA_ALLOC_CONF=" << curAllocConf);
+		}
+	}
 
 	torch::manual_seed(config.randomSeed);
 
@@ -568,8 +592,11 @@ void GGL::Learner::Start() {
 
 					float inferTime = 0;
 					float envStepTime = 0;
+					int64_t targetCollectionTimesteps = config.ppo.tsPerItr;
+					if (config.ppo.bufferSize > 0)
+						targetCollectionTimesteps = RS_MIN(targetCollectionTimesteps, config.ppo.bufferSize);
 
-					for (int step = 0; combinedTraj.Length() < config.ppo.tsPerItr || render; step++, stepsCollected += numRealPlayers) {
+					for (int step = 0; combinedTraj.Length() < targetCollectionTimesteps || render; step++, stepsCollected += numRealPlayers) {
 						Timer stepTimer = {};
 						envSet->Reset();
 						envStepTime += stepTimer.Elapsed();
@@ -830,6 +857,31 @@ void GGL::Learner::Start() {
 				report["Collection Physics Ticks/Second"] = collectedPhysicsTicks / collectionTime;
 				report["Consumption Physics Ticks/Second"] = collectedPhysicsTicks / consumptionTime;
 				report["Overall Physics Ticks/Second"] = collectedPhysicsTicks / (collectionTime + consumptionTime);
+				report["PPO Effective Buffer Size"] = (config.ppo.bufferSize > 0) ? config.ppo.bufferSize : config.ppo.tsPerItr;
+
+#ifdef RG_CUDA_SUPPORT
+				if (ppo->device.is_cuda()) {
+					size_t freeMem = 0, totalMem = 0;
+					if (cudaMemGetInfo(&freeMem, &totalMem) == cudaSuccess) {
+						double usedMem = (double)totalMem - (double)freeMem;
+						report["CUDA Memory Used (GiB)"] = BytesToGiB(usedMem);
+						report["CUDA Memory Free (GiB)"] = BytesToGiB((double)freeMem);
+						report["CUDA Memory Total (GiB)"] = BytesToGiB((double)totalMem);
+						report["CUDA Memory Used Ratio"] = totalMem ? (usedMem / (double)totalMem) : 0;
+					}
+
+					auto devIndex = (c10::DeviceIndex)(ppo->device.index() < 0 ? 0 : ppo->device.index());
+					auto stats = c10::cuda::CUDACachingAllocator::getDeviceStats(devIndex);
+					constexpr size_t agg = (size_t)c10::CachingAllocator::StatType::AGGREGATE;
+
+					report["PyTorch CUDA Allocated (GiB)"] = BytesToGiB((double)stats.allocated_bytes[agg].current);
+					report["PyTorch CUDA Reserved (GiB)"] = BytesToGiB((double)stats.reserved_bytes[agg].current);
+					report["PyTorch CUDA Active (GiB)"] = BytesToGiB((double)stats.active_bytes[agg].current);
+					report["PyTorch CUDA Requested (GiB)"] = BytesToGiB((double)stats.requested_bytes[agg].current);
+					report["PyTorch CUDA Allocated Peak (GiB)"] = BytesToGiB((double)stats.allocated_bytes[agg].peak);
+					report["PyTorch CUDA Reserved Peak (GiB)"] = BytesToGiB((double)stats.reserved_bytes[agg].peak);
+				}
+#endif
 				if (envStepTimeTotal > 0)
 					report["Env Physics Ticks/Second"] = collectedPhysicsTicks / envStepTimeTotal;
 
@@ -876,6 +928,9 @@ void GGL::Learner::Start() {
 						"Overall Steps/Second",
 						"Collection Physics Ticks/Second",
 						"Overall Physics Ticks/Second",
+						"PyTorch CUDA Allocated (GiB)",
+						"PyTorch CUDA Reserved (GiB)",
+						"CUDA Memory Used (GiB)",
 						"",
 						"Collection Time",
 						"-Inference Time",

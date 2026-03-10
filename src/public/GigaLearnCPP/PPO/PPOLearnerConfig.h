@@ -19,6 +19,11 @@ namespace GGL {
 		// This will only happen if the amount of remaining experience is < batchSize*2.
 		bool overbatching = true;
 
+		// Optional cap for collected timesteps kept in the experience buffer per iteration.
+		// Set to 0 to just use tsPerItr.
+		int64_t bufferSize = 0;
+		int64_t buffer_size = 0;
+
 		double maxEpisodeDuration = 120; // In seconds
 
 		// Actions with the highest probability are always chosen, instead of being more likely
@@ -31,9 +36,14 @@ namespace GGL {
 		bool useHalfPrecision = false;
 
 		// Aliases for useHalfPrecision to make external config code more portable.
-		// These fields are synchronized in SyncPrecisionAliases().
+		// These fields are synchronized in SyncRuntimeAliases().
 		bool useMixedPrecision = false;
 		bool use_mixed_precision = false;
+
+		// Recompute parts of the graph during training to reduce peak memory.
+		// This trades memory for additional compute.
+		bool gradientCheckpointing = false;
+		bool gradient_checkpointing = false;
 
 		PartialModelConfig policy, critic, sharedHead;
 
@@ -61,11 +71,23 @@ namespace GGL {
 		std::filesystem::path guidingPolicyPath = "guiding_policy/"; // Path of the guiding policy model(s)
 		float guidingStrength = 0.03f;
 
-		void SyncPrecisionAliases() {
+		void SyncRuntimeAliases() {
 			bool enabled = useHalfPrecision || useMixedPrecision || use_mixed_precision;
 			useHalfPrecision = enabled;
 			useMixedPrecision = enabled;
 			use_mixed_precision = enabled;
+
+			bool checkpointEnabled = gradientCheckpointing || gradient_checkpointing;
+			gradientCheckpointing = checkpointEnabled;
+			gradient_checkpointing = checkpointEnabled;
+
+			int64_t resolvedBufferSize = RS_MAX(bufferSize, buffer_size);
+			bufferSize = resolvedBufferSize;
+			buffer_size = resolvedBufferSize;
+		}
+
+		void SyncPrecisionAliases() {
+			SyncRuntimeAliases();
 		}
 
 		PPOLearnerConfig() {

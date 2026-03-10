@@ -38,6 +38,11 @@ namespace GGL {
 		int checkpointsToKeep = 8; // Checkpoint storage limit before old checkpoints are deleted, set to -1 to disable
 		LearnerDeviceType deviceType = LearnerDeviceType::AUTO; // Auto will use your CUDA GPU if available
 
+		// If true, set PYTORCH_CUDA_ALLOC_CONF when not already set in the environment.
+		// This can reduce allocator fragmentation for long-running GPU training loops.
+		bool setDefaultCudaAllocConf = true;
+		std::string defaultCudaAllocConf = "expandable_segments:True,max_split_size_mb:512";
+
 		// Standardize the obs values (doesn't seem to help much from my testing)
 		bool standardizeObs = false;
 		float minObsSTD = 1 / 10.f;

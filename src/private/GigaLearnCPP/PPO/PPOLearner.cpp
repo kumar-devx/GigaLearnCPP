@@ -8,7 +8,7 @@
 using namespace torch;
 
 GGL::PPOLearner::PPOLearner(int obsSize, int numActions, PPOLearnerConfig _config, Device _device) : config(_config), device(_device) {
-	config.SyncPrecisionAliases();
+	config.SyncRuntimeAliases();
 
 	if (config.miniBatchSize == 0)
 		config.miniBatchSize = config.batchSize;
@@ -31,6 +31,7 @@ GGL::PPOLearner::PPOLearner(int obsSize, int numActions, PPOLearnerConfig _confi
 	RG_LOG("\t[Total]: " << Utils::NumToStr(total));
 	RG_LOG("\tMixed precision inference: " << (config.useHalfPrecision ? "ENABLED" : "DISABLED") <<
 		(config.useHalfPrecision ? (device.is_cuda() ? " (CUDA FP16)" : " (CPU BF16)") : ""));
+	RG_LOG("\tGradient checkpointing: " << (config.gradientCheckpointing ? "ENABLED" : "DISABLED"));
 
 	if (config.useGuidingPolicy) {
 		RG_LOG("Guiding policy enabled, loading from " << config.guidingPolicyPath << "...");
@@ -177,10 +178,11 @@ void GGL::PPOLearner::Learn(ExperienceBuffer& experience, Report& report, bool i
 			auto batchActionMasks = batch.actionMasks;
 			auto batchTargetValues = batch.targetValues;
 			auto batchAdvantages = batch.advantages;
+			int64_t currentBatchSize = batchActs.size(0);
 
-			auto fnRunMinibatch = [&](int start, int stop) {
+			auto fnRunMinibatch = [&](int64_t start, int64_t stop) {
 
-				float batchSizeRatio = (stop - start) / (float)config.batchSize;
+				float batchSizeRatio = (stop - start) / (float)currentBatchSize;
 
 				// Send everything to the device and enforce correct shapes
 				auto acts = batchActs.slice(0, start, stop).to(device, true, true);
@@ -239,7 +241,7 @@ void GGL::PPOLearner::Learn(ExperienceBuffer& experience, Report& report, bool i
 				}
 
 				torch::Tensor criticLoss;
-				if (trainCritic) {
+				if (trainCritic && !(config.gradientCheckpointing && trainPolicy)) {
 					auto vals = InferCritic(obs);
 
 					// Compute value loss
@@ -263,8 +265,19 @@ void GGL::PPOLearner::Learn(ExperienceBuffer& experience, Report& report, bool i
 				}
 
 				if (trainPolicy && trainCritic) {
-					auto combinedLoss = ppoLoss + criticLoss;
-					combinedLoss.backward();
+					if (config.gradientCheckpointing) {
+						// Reduce peak graph memory by backpropagating policy first, then recomputing critic.
+						ppoLoss.backward();
+
+						auto vals = InferCritic(obs);
+						vals = vals.view_as(targetValues);
+						criticLoss = mseLoss(vals, targetValues) * batchSizeRatio;
+						avgCriticLoss += criticLoss.detach().cpu().item<float>();
+						criticLoss.backward();
+					} else {
+						auto combinedLoss = ppoLoss + criticLoss;
+						combinedLoss.backward();
+					}
 				} else {
 					if (trainPolicy)
 						ppoLoss.backward();
@@ -276,11 +289,11 @@ void GGL::PPOLearner::Learn(ExperienceBuffer& experience, Report& report, bool i
 			
 			if (device.is_cpu()) {
 				// Just run one minibatch
-				fnRunMinibatch(0, config.batchSize);
+				fnRunMinibatch(0, currentBatchSize);
 			} else {
-				for (int mbs = 0; mbs < config.batchSize; mbs += config.miniBatchSize) {
-					int start = mbs;
-					int stop = start + config.miniBatchSize;
+				for (int64_t mbs = 0; mbs < currentBatchSize; mbs += config.miniBatchSize) {
+					int64_t start = mbs;
+					int64_t stop = RS_MIN(start + config.miniBatchSize, currentBatchSize);
 					fnRunMinibatch(start, stop);
 				}
 			}

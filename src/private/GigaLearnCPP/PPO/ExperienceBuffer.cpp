@@ -38,6 +38,12 @@ std::vector<GGL::ExperienceTensors> GGL::ExperienceBuffer::GetAllBatchesShuffled
 
 	// Get a sample set from each of the batches
 	std::vector<ExperienceTensors> result;
+	if (expSize > 0 && expSize < batchSize) {
+		result.push_back(_GetSamples(indices, expSize));
+		delete[] indices;
+		return result;
+	}
+
 	for (int64_t startIdx = 0; startIdx + batchSize <= expSize; startIdx += batchSize) {
 
 		int curBatchSize = batchSize;
