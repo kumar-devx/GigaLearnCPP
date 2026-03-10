@@ -110,19 +110,36 @@ RLGC::EnvSet::EnvSet(const EnvSetConfig& config) : config(config) {
 
 #ifdef RS_CUDA_ENABLED
 	{
-		bool allCudaArenas = !arenas.empty();
-		for (Arena* arena : arenas)
-			allCudaArenas &= (arena && arena->_useCuda);
+		RG_LOG("========== EnvSet CUDA Initialization ==========");
+		RG_LOG("Total arenas: " << arenas.size());
+		
+		int cudaEnabledCount = 0;
+		for (int i = 0; i < arenas.size(); i++) {
+			Arena* arena = arenas[i];
+			bool hasCuda = arena && arena->_useCuda;
+			if (hasCuda) cudaEnabledCount++;
+			if (i < 5 || i >= arenas.size() - 5) { // Log first 5 and last 5
+				RG_LOG("  Arena[" << i << "]: " << (arena ? "valid" : "NULL") 
+					<< ", _useCuda=" << (arena ? arena->_useCuda : false));
+			} else if (i == 5) {
+				RG_LOG("  ... (" << (arenas.size() - 10) << " more arenas) ...");
+			}
+		}
+		
+		bool allCudaArenas = !arenas.empty() && cudaEnabledCount == (int)arenas.size();
+		RG_LOG("CUDA-enabled arenas: " << cudaEnabledCount << "/" << arenas.size());
 
 		if (allCudaArenas) {
 			arenaBatch = new RocketSim::ArenaBatch();
 			for (Arena* arena : arenas)
 				arenaBatch->AddArena(arena);
 			useArenaBatch = true;
-			RG_LOG("EnvSet: Batched GPU stepping ENABLED (" << arenas.size() << " arenas, " << state.numPlayers << " total players)");
+			RG_LOG("✓ Batched GPU stepping ENABLED (" << arenas.size() << " arenas, " << state.numPlayers << " total players)");
 		} else {
-			RG_LOG("EnvSet: Batched GPU stepping disabled (not all arenas have CUDA enabled)");
+			useArenaBatch = false;
+			RG_LOG("✗ Batched GPU stepping DISABLED (only " << cudaEnabledCount << "/" << arenas.size() << " arenas have CUDA)");
 		}
+		RG_LOG("==============================================");
 	}
 #endif
 	
