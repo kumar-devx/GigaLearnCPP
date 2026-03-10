@@ -592,6 +592,8 @@ void GGL::Learner::Start() {
 
 					float inferTime = 0;
 					float envStepTime = 0;
+					int64_t inferCalls = 0;
+					double inferSamples = 0;
 					int64_t targetCollectionTimesteps = config.ppo.tsPerItr;
 					if (config.ppo.bufferSize > 0)
 						targetCollectionTimesteps = RS_MIN(targetCollectionTimesteps, config.ppo.bufferSize);
@@ -647,6 +649,8 @@ void GGL::Learner::Start() {
 							torch::Tensor tdOldStates = tStates.index_select(0, tOldPlayerIndices).to(ppo->device, true);
 							torch::Tensor tdNewActionMasks = tActionMasks.index_select(0, tNewPlayerIndices).to(ppo->device, true);
 							torch::Tensor tdOldActionMasks = tActionMasks.index_select(0, tOldPlayerIndices).to(ppo->device, true);
+							inferCalls += 2;
+							inferSamples += (double)tdNewStates.size(0) + (double)tdOldStates.size(0);
 
 							torch::Tensor tNewActions;
 							torch::Tensor tOldActions;
@@ -660,18 +664,23 @@ void GGL::Learner::Start() {
 						} else {
 							torch::Tensor tdStates = tStates.to(ppo->device, true);
 							torch::Tensor tdActionMasks = tActionMasks.to(ppo->device, true);
+							inferCalls += 1;
+							inferSamples += (double)tdStates.size(0);
 							ppo->InferActions(tdStates, tdActionMasks, &tActions, &tLogProbs);
-							tActions = tActions.cpu();
+							// Async D2H: DMA transfer runs concurrently while CPU blocks on Sync() below
+							tActions = tActions.to(torch::kCPU, /*non_blocking=*/true);
+							if (tLogProbs.defined() && !render)
+								tLogProbs = tLogProbs.to(torch::kCPU, /*non_blocking=*/true);
 						}
 						inferTime += inferTimer.Elapsed();
 
+						stepTimer.Reset();
+						envSet->Sync(); // Physics finishes; async D2H runs concurrently during this wait
+						// D2H is expected to be complete by now (physics > transfer time)
 						auto curActions = TENSOR_TO_VEC<int>(tActions);
 						FList newLogProbs;
 						if (tLogProbs.defined() && !render)
-							newLogProbs = TENSOR_TO_VEC<float>(tLogProbs);	
-
-						stepTimer.Reset();
-						envSet->Sync(); // Make sure the first half is done
+							newLogProbs = TENSOR_TO_VEC<float>(tLogProbs);
 						envSet->StepSecondHalf(curActions, false);
 						envStepTime += stepTimer.Elapsed();
 
@@ -747,6 +756,9 @@ void GGL::Learner::Start() {
 					}
 
 					report["Inference Time"] = inferTime;
+					report["Inference Calls"] = inferCalls;
+					report["Inference Samples"] = inferSamples;
+					report["Inference Avg Batch Size"] = inferCalls ? (inferSamples / (double)inferCalls) : 0;
 					report["Env Step Time"] = envStepTime;
 					envStepTimeTotal = envStepTime;
 				}
@@ -934,6 +946,8 @@ void GGL::Learner::Start() {
 						"",
 						"Collection Time",
 						"-Inference Time",
+						"-Inference Calls",
+						"-Inference Avg Batch Size",
 						"-Env Step Time",
 						"-Env Physics Ticks/Second",
 						"Consumption Time",

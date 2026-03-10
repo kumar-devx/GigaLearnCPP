@@ -107,10 +107,48 @@ RLGC::EnvSet::EnvSet(const EnvSetConfig& config) : config(config) {
 		std::bind(&RLGC::EnvSet::ResetArena, this, std::placeholders::_1),
 		config.numArenas, false
 	);
+
+#ifdef RS_CUDA_ENABLED
+	{
+		bool allCudaArenas = !arenas.empty();
+		for (Arena* arena : arenas)
+			allCudaArenas &= (arena && arena->_useCuda);
+
+		if (allCudaArenas) {
+			arenaBatch = new RocketSim::ArenaBatch();
+			for (Arena* arena : arenas)
+				arenaBatch->AddArena(arena);
+			useArenaBatch = true;
+		}
+	}
+#endif
 	
 }
 
 void RLGC::EnvSet::StepFirstHalf(bool async) {
+
+#ifdef RS_CUDA_ENABLED
+	if (useArenaBatch) {
+		auto fnBatchStep = [&](int) {
+			for (int arenaIdx = 0; arenaIdx < arenas.size(); arenaIdx++) {
+				auto& gs = state.gameStates[arenaIdx];
+
+				// Set previous gamestates
+				state.prevGameStates[arenaIdx] = gs;
+				gs.ResetBeforeStep();
+			}
+
+			arenaBatch->StepAll(config.actionDelay);
+		};
+
+		if (async)
+			g_ThreadPool.StartBatchedJobs(fnBatchStep, 1, true);
+		else
+			fnBatchStep(0);
+
+		return;
+	}
+#endif
 
 	auto fnStepArena = [&](int arenaIdx) {
 		Arena* arena = arenas[arenaIdx];
@@ -131,6 +169,138 @@ void RLGC::EnvSet::StepFirstHalf(bool async) {
 }
 
 void RLGC::EnvSet::StepSecondHalf(const IList& actionIndices, bool async) {
+
+#ifdef RS_CUDA_ENABLED
+	if (useArenaBatch) {
+		std::vector<std::vector<Action>> parsedActions(arenas.size());
+
+		auto fnPrepareArena = [&](int arenaIdx) {
+			Arena* arena = arenas[arenaIdx];
+			auto& gs = state.gameStates[arenaIdx];
+			int playerStartIdx = state.arenaPlayerStartIdx[arenaIdx];
+
+			auto actions = std::vector<Action>(gs.players.size());
+			auto carItr = arena->_cars.begin();
+			for (int i = 0; i < gs.players.size(); i++, carItr++) {
+				auto& player = gs.players[i];
+				Car* car = *carItr;
+				Action action = actionParsers[arenaIdx]->ParseAction(actionIndices[playerStartIdx + i], player, gs);
+				car->controls = (CarControls)action;
+				actions[i] = action;
+			}
+
+			parsedActions[arenaIdx] = std::move(actions);
+		};
+
+		auto fnFinalizeArena = [&](int arenaIdx) {
+
+			Arena* arena = arenas[arenaIdx];
+			auto& gs = state.gameStates[arenaIdx];
+			int playerStartIdx = state.arenaPlayerStartIdx[arenaIdx];
+			auto& actions = parsedActions[arenaIdx];
+
+			if (eventTrackers[arenaIdx])
+				eventTrackers[arenaIdx]->Update(arena);
+
+			GameState* gsPrev = &state.prevGameStates[arenaIdx];
+			if (gsPrev->IsEmpty())
+				gsPrev = NULL;
+
+			gs.UpdateFromArena(arena, actions, gsPrev);
+
+			// Update terminal
+			uint8_t terminalType = TerminalType::NOT_TERMINAL;
+			{
+				for (auto cond : terminalConditions[arenaIdx]) {
+					if (cond->IsTerminal(gs)) {
+						bool isTrunc = cond->IsTruncation();
+						uint8_t curTerminalType = isTrunc ? TerminalType::TRUNCATED : TerminalType::NORMAL;
+						if (terminalType == TerminalType::NOT_TERMINAL) {
+							terminalType = curTerminalType;
+						} else {
+							// We already know this state is terminal
+							// However, if we only know it is a truncated terminal, we should let normal terminals take priority
+							// (Normal terminals are better information than truncations)
+							if (curTerminalType == TerminalType::NORMAL)
+								terminalType = curTerminalType;
+						}
+
+						// NOTE: We can't break since terminal conditions are guaranteed to be called once per step
+					}
+				}
+				state.terminals[arenaIdx] = terminalType;
+			}
+
+			// Pre-step rewards
+			{
+				for (auto& weighted : rewards[arenaIdx])
+					weighted.reward->PreStep(gs);
+			}
+
+			// Update rewards
+			{
+				FList allRewards = FList(gs.players.size(), 0);
+				for (int rewardIdx = 0; rewardIdx < rewards[arenaIdx].size(); rewardIdx++) {
+					auto& weightedReward = rewards[arenaIdx][rewardIdx];
+					FList output = weightedReward.reward->GetAllRewards(gs, terminalType);
+					for (int i = 0; i < gs.players.size(); i++)
+						allRewards[i] += output[i] * weightedReward.weight;
+
+					// Save the reward
+					if (config.saveRewards) {
+						int playerSampleIndex;
+						if (config.shuffleRewardSampling) {
+							playerSampleIndex = Math::RandInt(0, output.size());
+						} else {
+							// Find player with the lowest id
+							playerSampleIndex = 0;
+							int lowestID = gs.players[0].carId;
+							for (int i = 1; i < gs.players.size(); i++) {
+								auto id = gs.players[i].carId;
+								if (id < lowestID) {
+									lowestID = id;
+									playerSampleIndex = i;
+								}
+							}
+						}
+						// We will only take the reward from a random player
+						float rewardToSave = output[playerSampleIndex];
+
+						// If zero-sum, use the inner reward
+						if (ZeroSumReward* zeroSum = dynamic_cast<ZeroSumReward*>(weightedReward.reward))
+							rewardToSave = zeroSum->_lastRewards[playerSampleIndex];
+
+						// If needed, initialize last rewards
+						if (state.lastRewards[arenaIdx].empty())
+							state.lastRewards[arenaIdx].resize(rewards[arenaIdx].size());
+
+						state.lastRewards[arenaIdx][rewardIdx] = rewardToSave;
+					}
+				}
+
+				for (int i = 0; i < gs.players.size(); i++)
+					state.rewards[playerStartIdx + i] = allRewards[i];
+			}
+
+			// Update observations
+			{
+				for (int i = 0; i < gs.players.size(); i++)
+					state.obs.Set(playerStartIdx + i, obsBuilders[arenaIdx]->BuildObs(gs.players[i], gs));
+			}
+
+			// Update action masks
+			{
+				for (int i = 0; i < gs.players.size(); i++)
+					state.actionMasks.Set(playerStartIdx + i, actionParsers[arenaIdx]->GetActionMask(gs.players[i], gs));
+			}
+		};
+
+		g_ThreadPool.StartBatchedJobs(fnPrepareArena, arenas.size(), false);
+		arenaBatch->StepAll(config.tickSkip - config.actionDelay);
+		g_ThreadPool.StartBatchedJobs(fnFinalizeArena, arenas.size(), async);
+		return;
+	}
+#endif
 
 	auto fnStepArenas = [&](int arenaIdx) {
 

@@ -9,6 +9,10 @@
 #include "../ThreadPool.h"
 #include <RLGymCPP/Rewards/Reward.h>
 
+#ifdef RS_CUDA_ENABLED
+namespace RocketSim { class ArenaBatch; }
+#endif
+
 namespace RLGC {
 
 	struct EnvCreateResult {
@@ -75,6 +79,11 @@ namespace RLGC {
 
 		EnvSetConfig config;
 
+#ifdef RS_CUDA_ENABLED
+		RocketSim::ArenaBatch* arenaBatch = NULL;
+		bool useArenaBatch = false;
+#endif
+
 		int obsSize;
 		int numActions;
 
@@ -91,6 +100,11 @@ namespace RLGC {
 		RG_NO_COPY(EnvSet);
 
 		~EnvSet() {
+#ifdef RS_CUDA_ENABLED
+			if (arenaBatch)
+				delete arenaBatch;
+#endif
+
 			for (Arena* arena : arenas)
 				delete arena;
 

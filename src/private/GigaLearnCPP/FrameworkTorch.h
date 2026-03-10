@@ -27,7 +27,12 @@ namespace GGL {
 
 	template <typename T>
 	inline torch::Tensor DIMLIST2_TO_TENSOR(const RLGC::DimList2<T>& list) {
-		return torch::tensor(list.data).reshape({ (int64_t)list.size[0], (int64_t)list.size[1] });
+		auto opts = torch::TensorOptions().dtype(torch::CppTypeToScalarType<T>());
+		return torch::from_blob(
+			(void*)list.data.data(),
+			{ (int64_t)list.size[0], (int64_t)list.size[1] },
+			opts
+		);
 	}
 
 	template <typename T>
